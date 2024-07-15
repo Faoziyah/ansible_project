@@ -1,0 +1,84 @@
+---
+- name: install tomcat on ubuntu 22.04
+  hosts: tomcat
+  become: true
+  tasks:
+    - name: install java JDK
+      apt: 
+        name: openjdk-11-jdk
+        state: present
+    - name: create a dedicated user to run Apache Tomcat
+      user:
+        name: tomcat
+        state: present
+        shell: /bin/false  
+        home: /opt/tomcat
+        system: yes  
+        create_home: yes  
+    - name: Download and Extract apache-tomcat-10.1.25.tar.gz
+      unarchive:
+        src: https://dlcdn.apache.org/tomcat/tomcat-10/v10.1.25/bin/apache-tomcat-10.1.25.tar.gz
+        dest: /opt/tomcat
+        remote_src: yes
+        extra_opts: [--strip-components=1]
+    - name: set permission and change ownership
+      file:
+        path: /opt/tomcat
+        owner: tomcat
+        group: tomcat
+        mode: "u+rwx,g+rx,o=rx"
+        recurse: yes
+        state: directory
+
+    - name: create a tomcat user account by editing "/opt/tomcat/conf/tomcat-users.xml"
+      copy: 
+        content: |-
+          <role rolename="manager-gui" />
+          <user username="manager" password="secure-password" roles="manager-gui" />
+          <role rolename="admin-gui" />
+          <user username="admin" password="secure-password" roles="manager-gui,admin-gui" />
+        dest: /opt/tomcat/conf/tomcat-users.xml
+
+    - name: Edit context.xml to remove access restriction
+      lineinfile:
+        path: /opt/tomcat/webapps/manager/META-INF/context.xml
+        regexp: <Valve className="org.apache.catalina.valves.RemoteAddrValve"
+         allow="127\.\d+\.\d+\.\d+|::1|0:0:0:0:0:0:0:1" />
+        state: absent
+        backup: yes
+    - name: allow access to host manager app and remove restriction
+      lineinfile:
+        path: /opt/tomcat/webapps/host-manager/META-INF/context.xml
+        regexp: <Valve className="org.apache.catalina.valves.RemoteAddrValve" 
+          allow="127\.\d+\.\d+\.\d+|::1|0:0:0:0:0:0:0:1" />
+        state: absent
+        backup: yes
+    - name: create a systemd service file to manage the Tomcat service
+      copy:
+        content: |-
+          [Unit]
+          Description=Apache Tomcat 10 Web Application Server
+          After=network.target
+          
+          [Service]
+          Type=forking
+          
+          User=tomcat
+          Group=tomcat
+          
+          Environment="JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64"
+          Environment="CATALINA_HOME=/opt/tomcat"
+          Environment="CATALINA_BASE=/opt/tomcat"
+          Environment="CATALINA_PID=/opt/tomcat/temp/tomcat.pid"
+          Environment="CATALINA_OPTS=-Xms512M -Xmx1024M -server -XX:+UseParallelGC"
+          
+          ExecStart=/opt/tomcat/bin/startup.sh
+          ExecStop=/opt/tomcat/bin/shutdown.sh
+          
+          [Install]
+          WantedBy=multi-user.target
+        dest: /etc/systemd/system/tomcat.service
+    - name: reload systememd deamon
+      systemd:
+        name: tomcat
+        state: restarted

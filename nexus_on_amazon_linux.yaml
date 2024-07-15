@@ -1,0 +1,107 @@
+---
+- name: Install Nexus Repository Manager on Amazon Linux
+  hosts: nexus
+  become: true
+
+  vars:
+    nexus_version: 3.38.1-01
+    nexus_user: nexus
+    nexus_group: nexus
+    nexus_install_dir: /opt/nexus
+    nexus_data_dir: /opt/sonatype-work
+
+  tasks:
+    - name: Ensure Java is installed
+      yum:
+        name: java-1.8.0-openjdk
+        state: present
+
+    - name: Create Nexus group
+      group:
+        name: "{{ nexus_group }}"
+        state: present
+
+    - name: Create Nexus user
+      user:
+        name: "{{ nexus_user }}"
+        group: "{{ nexus_group }}"
+        home: "{{ nexus_install_dir }}"
+        shell: /bin/bash
+        system: yes
+        create_home: no
+
+    - name: Create installation directory
+      file:
+        path: "{{ nexus_install_dir }}"
+        state: directory
+        owner: "{{ nexus_user }}"
+        group: "{{ nexus_group }}"
+
+    - name: Create data directory
+      file:
+        path: "{{ nexus_data_dir }}"
+        state: directory
+        owner: "{{ nexus_user }}"
+        group: "{{ nexus_group }}"
+
+    - name: Download Nexus
+      get_url:
+        url: "https://download.sonatype.com/nexus/3/nexus-{{ nexus_version }}-unix.tar.gz"
+        dest: "/tmp/nexus-{{ nexus_version }}-unix.tar.gz"
+
+    - name: Extract Nexus archive
+      unarchive:
+        src: "/tmp/nexus-{{ nexus_version }}-unix.tar.gz"
+        dest: "{{ nexus_install_dir }}"
+        remote_src: yes
+        creates: "{{ nexus_install_dir }}/nexus-{{ nexus_version }}"
+
+    - name: Change ownership to nexus
+      file:
+        path: "{{ nexus_install_dir }}/nexus-{{ nexus_version }}"
+        state: directory
+        owner: "{{ nexus_user }}"
+        group: "{{ nexus_group }}"
+        recurse: yes
+
+    - name: Create symbolic link to latest Nexus version
+      file:
+        src: "{{ nexus_install_dir }}/nexus-{{ nexus_version }}"
+        dest: "{{ nexus_install_dir }}/latest"
+        state: link
+
+    - name: Configure Nexus to run as the nexus user
+      lineinfile:
+        path: "{{ nexus_install_dir }}/latest/bin/nexus"
+        regexp: '^#?RUN_AS_USER='
+        line: "RUN_AS_USER={{ nexus_user }}"
+        state: present
+
+    - name: Set up Nexus as a systemd service
+      copy:
+        content: |
+          [Unit]
+          Description=nexus service
+          After=network.target
+
+          [Service]
+          Type=forking
+          ExecStart={{ nexus_install_dir }}/latest/bin/nexus start
+          ExecStop={{ nexus_install_dir }}/latest/bin/nexus stop
+          User={{ nexus_user }}
+          Group={{ nexus_group }}
+          Restart=on-abort
+          LimitNOFILE=65536
+
+          [Install]
+          WantedBy=multi-user.target
+        dest: /etc/systemd/system/nexus.service
+
+    - name: Reload systemd
+      command: systemctl daemon-reload
+
+    - name: Enable and start Nexus service
+      systemd:
+        name: nexus
+        enabled: yes
+        state: started

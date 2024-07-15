@@ -1,0 +1,41 @@
+---
+- name: Download SonarQube binary
+  get_url:
+    url: https://binaries.sonarsource.com/Distribution/sonarqube/sonarqube-{{ sonarqube_version }}.zip
+    dest: /opt/sonarqube.zip
+  vars:
+    sonarqube_version: 10.5.1  # Adjust to desired version
+
+- name: Extract SonarQube archive
+  archive:
+    path: /opt/sonarqube.zip
+    dest: /opt/sonarqube
+    extract: yes
+    owner: sonarqube
+    group: sonarqube
+  vars:
+    sonarqube_user: sonarqube  # Adjust username if needed
+
+- name: Create SonarQube system user
+  user:
+    name: "{{ sonarqube_user }}"
+    system: yes
+    shell: /bin/bash  # Adjust shell if needed
+
+- name: Create systemd service file for SonarQube
+  template:
+    src: sonarqube.service.j2
+    dest: /etc/systemd/system/sonar.service
+    owner: root
+    group: root
+  vars:
+    sonarqube_home: /opt/sonarqube
+
+- name: Reload systemd daemon
+  systemd:
+    name: daemon-reload
+
+- name: Enable SonarQube service at boot
+  systemd:
+    name: sonar.service
+    enabled: yes

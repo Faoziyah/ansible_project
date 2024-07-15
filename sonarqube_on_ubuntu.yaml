@@ -1,0 +1,159 @@
+---
+- name: Install SonarQube on Ubuntu
+  hosts: sonarqube
+  become: true
+
+  vars:
+    sonarqube_version: 9.6.1
+    sonarqube_user: sonar
+    sonarqube_group: sonar
+    sonarqube_install_dir: /opt/sonarqube
+
+  tasks:
+    - name: Update and upgrade APT packages
+      apt:
+        update_cache: yes
+        upgrade: dist
+
+    - name: Install necessary packages
+      apt:
+        name:
+          - openjdk-11-jdk
+          - unzip
+          - wget
+          - gnupg
+          - apt-transport-https
+          - software-properties-common
+        state: present
+
+    - name: Add PostgreSQL APT repository
+      apt_repository:
+        repo: 'deb http://apt.postgresql.org/pub/repos/apt/dists/focal-pgdg/main/binary-amd64/packages'
+        state: present
+
+    - name: Add PostgreSQL APT key
+      apt_key:
+        url: https://www.postgresql.org/media/keys/ACCC4CF8.asc
+        state: present
+
+    - name: Install PostgreSQL
+      apt:
+        name: postgresql-12
+        state: present
+
+    - name: Start PostgreSQL service
+      systemd:
+        name: postgresql
+        state: started
+        enabled: yes
+
+    - name: Create PostgreSQL user and database for SonarQube
+      become_user: postgres
+      postgresql_db:
+        name: sonar
+        encoding: UTF8
+        lc_collate: en_US.UTF-8
+        lc_ctype: en_US.UTF-8
+        template: template0
+        state: present
+
+    - name: Create PostgreSQL user for SonarQube
+      become_user: postgres
+      postgresql_user:
+        name: sonar
+        password: "sonar"
+        state: present
+
+    - name: Grant privileges to SonarQube user on database
+      become_user: postgres
+      postgresql_privs:
+        db: sonar
+        role: sonar
+        privs: ALL
+        type: database
+
+    - name: Create SonarQube group
+      group:
+        name: "{{ sonarqube_group }}"
+        state: present
+
+    - name: Create SonarQube user
+      user:
+        name: "{{ sonarqube_user }}"
+        group: "{{ sonarqube_group }}"
+        home: "{{ sonarqube_install_dir }}"
+        shell: /bin/bash
+        system: yes
+        create_home: no
+
+    - name: Download SonarQube
+      get_url:
+        url: "https://binaries.sonarsource.com/Distribution/sonarqube/sonarqube-{{ sonarqube_version }}.zip"
+        dest: "/tmp/sonarqube-{{ sonarqube_version }}.zip"
+
+    - name: Create installation directory
+      file:
+        path: "{{ sonarqube_install_dir }}"
+        state: directory
+        owner: "{{ sonarqube_user }}"
+        group: "{{ sonarqube_group }}"
+
+    - name: Extract SonarQube archive
+      unarchive:
+        src: "/tmp/sonarqube-{{ sonarqube_version }}.zip"
+        dest: "{{ sonarqube_install_dir }}"
+        remote_src: yes
+        creates: "{{ sonarqube_install_dir }}/sonarqube-{{ sonarqube_version }}"
+
+    - name: Change ownership to sonar
+      file:
+        path: "{{ sonarqube_install_dir }}/sonarqube-{{ sonarqube_version }}"
+        state: directory
+        owner: "{{ sonarqube_user }}"
+        group: "{{ sonarqube_group }}"
+        recurse: yes
+
+    - name: Create symbolic link to latest SonarQube version
+      file:
+        src: "{{ sonarqube_install_dir }}/sonarqube-{{ sonarqube_version }}"
+        dest: "{{ sonarqube_install_dir }}/latest"
+        state: link
+
+    - name: Configure SonarQube database settings
+      lineinfile:
+        path: "{{ sonarqube_install_dir }}/latest/conf/sonar.properties"
+        regexp: '^#?(sonar.jdbc.username|sonar.jdbc.password|sonar.jdbc.url)'
+        line: |
+          sonar.jdbc.username=sonar
+          sonar.jdbc.password=sonar
+          sonar.jdbc.url=jdbc:postgresql://localhost/sonar
+
+    - name: Set up SonarQube service
+      copy:
+        content: |
+          [Unit]
+          Description=SonarQube service
+          After=syslog.target network.target
+
+          [Service]
+          Type=forking
+          ExecStart={{ sonarqube_install_dir }}/latest/bin/linux-x86-64/sonar.sh start
+          ExecStop={{ sonarqube_install_dir }}/latest/bin/linux-x86-64/sonar.sh stop
+          User={{ sonarqube_user }}
+          Group={{ sonarqube_group }}
+          Restart=always
+          LimitNOFILE=65536
+          LimitNPROC=4096
+
+          [Install]
+          WantedBy=multi-user.target
+        dest: /etc/systemd/system/sonarqube.service
+
+    - name: Reload systemd
+      command: systemctl daemon-reload
+
+    - name: Enable and start SonarQube service
+      systemd:
+        name: sonarqube
+        enabled: yes
+        state: started

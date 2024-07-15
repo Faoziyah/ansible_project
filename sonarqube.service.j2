@@ -1,0 +1,13 @@
+[Unit]
+Description=SonarQube Server
+After=network.target postgresql.service
+
+[Service]
+User={{ sonarqube_user }}
+Group={{ sonarqube_user }}
+WorkingDirectory={{ sonarqube_home }}
+Environment="JAVA_OPTS=-Xms512m -Xmx1024m"  # Adjust memory settings as needed
+ExecStart={{ sonarqube_home }}/bin/linux-x86-64/sonar.sh start
+
+[Install]
+WantedBy=multi-user.target
